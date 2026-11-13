@@ -133,7 +133,7 @@ def main():
 
     vals = [x for arr in data.values() for x in arr if x is not None]
     payload = {
-        "disease": "Mpox (мавпяча віспа), регіон AFRO",
+        "disease": "Міавпяча віспа, регіон AFRO",
         "unit": "підтверджених випадків за квартал",
         "years": [f"{q.year} Q{q.quarter}" for q in quarters],   
         "forecast_from": forecast_from, "data_from": data_from,
