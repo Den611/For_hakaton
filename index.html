@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Африка: динаміка та прогноз</title>
+<title>Африка: mpox по кварталах</title>
 <style>
   :root { --ink:#2b2320; --muted:#7a6c66; --bg:#f6f3f0; --nodata:#d9d4d0; --accent:#b3121b; }
   * { box-sizing: border-box; }
@@ -18,25 +18,50 @@
   .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
   .map-container { flex: 1; min-width: 500px; }
   
-  #stage { position:relative; background: #fff; border: 1px solid #e0dad6; padding: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); }
+  #stage { position:relative; background: #e6edf1; border: 1px solid #e0dad6; padding: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); }
   svg { width:100%; height:auto; display:block; }
-  path.c { stroke:#fff; stroke-width:.6; transition: fill .35s; cursor:pointer; }
+  path.c { stroke:#b9b2ad; stroke-width:.6; transition: fill .35s; cursor:pointer; }
   path.c:hover { stroke:var(--ink); stroke-width:1.4; }
   path.selected { stroke: var(--ink) !important; stroke-width: 2px !important; }
   
   #tip { position:absolute; pointer-events:none; background:#fff; border:1px solid #ddd;
          padding:6px 10px; font-size:13px; display:none; box-shadow:0 2px 8px rgba(0,0,0,.12); z-index: 10; }
-  #legend { position:absolute; left:16px; bottom:16px; font-size:12px; color:var(--muted); background: rgba(255,255,255,0.85); padding: 8px; border: 1px solid #ddd; }
+         
+  #legend { position:absolute; left:16px; bottom:16px; font-size:12px; color:var(--muted); background: rgba(255,255,255,0.85); padding: 8px; border: 1px solid #ddd; z-index: 5; }
   #bar { width:160px; height:10px; background:linear-gradient(to right,#fff,#b3121b); border:1px solid #ccc; margin-top: 4px; }
   #legend div.l { display:flex; justify-content:space-between; }
   #legend .nd { display:flex; align-items:center; gap:6px; margin-top:6px; }
   #legend .nd i { width:12px; height:12px; background:var(--nodata); display:inline-block; }
-  
-  .sidebar { width: 440px; background: #fff; border: 1px solid #e0dad6; padding: 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); display: flex; flex-direction: column; }
+
+  .sidebar { width: 440px; background: #fff; border: 1px solid #e0dad6; padding: 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 16px; }
   .sidebar h3 { margin: 0 0 4px 0; font-size: 18px; }
   .sidebar .chart-sub { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
-  .chart-container { position: relative; width: 100%; height: 350px; }
+  .chart-container { position: relative; width: 100%; height: 320px; }
 
+  #protection-box {
+    background: #faf6f4;
+    border: 1px solid #e0dad6;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--ink);
+  }
+  #protection-box h4 {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    border-bottom: 1px solid #e0dad6;
+    padding-bottom: 4px;
+  }
+  #protection-box ul {
+    margin: 0;
+    padding-left: 16px;
+    line-height: 1.4;
+  }
+  #protection-box li {
+    margin-bottom: 6px;
+  }
+  
   #controls { display:flex; gap:14px; align-items:center; margin-top:14px; width: 100%; }
   button { font:inherit; font-size:15px; padding:8px 18px; border:1px solid var(--ink);
            background:var(--ink); color:#fff; cursor:pointer; min-width:110px; }
@@ -46,7 +71,6 @@
   #err { color:var(--accent); display:none; margin-top:12px; }
   @media (prefers-reduced-motion: reduce) { path.c { transition:none; } }
 </style>
-<!-- Підключення Chart.js для побудови графіка -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -63,8 +87,9 @@
     <div class="map-container">
       <div id="stage">
         <svg id="map" viewBox="0 0 800 800" role="img" aria-label="Карта Африки"></svg>
+        
         <div id="legend">
-          <div>Показник (на 100 тис.)</div>
+          <div>Нових випадків за квартал (шкала √)</div>
           <div id="bar"></div>
           <div class="l"><span>0</span><span id="maxl"></span></div>
           <div class="nd"><i></i>немає даних</div>
@@ -74,7 +99,7 @@
 
       <div id="controls">
         <button id="play">▶ Грати</button>
-        <input id="slider" type="range" min="0" value="0" aria-label="Рік">
+        <input id="slider" type="range" min="0" value="0" aria-label="Квартал">
         <select id="speed" aria-label="Швидкість">
           <option value="1200">повільно</option>
           <option value="600" selected>середньо</option>
@@ -84,10 +109,22 @@
     </div>
 
     <div class="sidebar">
-      <h3 id="chart-country-name">Виберіть країну</h3>
-      <div class="chart-sub">Динаміка та прогноз (з похибкою)</div>
-      <div class="chart-container">
-        <canvas id="countryChart"></canvas>
+      <div>
+        <h3 id="chart-country-name">Виберіть країну</h3>
+        <div class="chart-sub">Факт і прогноз Prophet (інтервал 80%)</div>
+        <div class="chart-container">
+          <canvas id="countryChart"></canvas>
+        </div>
+      </div>
+
+      <div id="protection-box">
+        <h4>Як захиститися?</h4>
+        <ul>
+          <li><b>Вакцинація:</b> зверніться до лікаря.</li>
+          <li><b>Контакти:</b> уникайте контакту «шкіра до шкіри».</li>
+          <li><b>Ізоляція:</b> залишайтеся вдома, носіть маски.</li>
+          <li><b>Тварини:</b> не контактуйте з дикими тваринами.</li>
+        </ul>
       </div>
     </div>
   </div>
@@ -97,15 +134,17 @@
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script>
-const color = d3.scaleLinear().range(["#ffffff", "#b3121b"]).clamp(true);
-const iso = p => p.ADM0_A3 || p.ISO_A3 || p.iso_a3 || p.id;
+let COLOR_MAX = 1, DATA = {};
+const mix = d3.interpolateRgb("#ffffff", "#b3121b");
+const color = v => mix(Math.sqrt(Math.min(Math.max(v / COLOR_MAX, 0), 1)));
+const iso = p => [p.ISO_A3, p.ISO_A3_EH, p.ADM0_A3, p.iso_a3, p.id].find(k => k && DATA[k]) || p.ADM0_A3 || p.ISO_A3 || p.iso_a3 || p.id;
 const nameOf = p => p.NAME_UK || p.NAME || p.name || iso(p);
 
 Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) => {
   document.getElementById("title").textContent = D.disease;
   document.getElementById("sub").textContent = D.unit;
   document.getElementById("maxl").textContent = Math.round(D.max);
-  color.domain([0, D.max]);
+  COLOR_MAX = D.max; DATA = D.data;
 
   const W = 800, H = 800;
   const proj = d3.geoMercator().fitSize([W, H], geo);
@@ -113,13 +152,12 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
   const svg = d3.select("#map");
   const tip = document.getElementById("tip");
   let i = 0, timer = null;
-  let selectedIso = "NGA"; // Обрана країна за замовчуванням (Нігерія)
+  let selectedIso = "COD"; 
 
   const val = f => { const a = D.data[iso(f.properties)]; return a ? a[i] : null; };
   const errVal = f => { const eArr = D.errors ? D.errors[iso(f.properties)] : null; return eArr ? eArr[i] : 0; };
   const fill = f => { const v = val(f); return v == null ? "var(--nodata)" : color(v); };
 
-  // Ініціалізація графіку Chart.js
   const ctx = document.getElementById('countryChart').getContext('2d');
   const years = D.years;
   
@@ -129,7 +167,7 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
       labels: years,
       datasets: [
         {
-          label: 'Значення',
+          label: 'Хворі: ',
           data: [],
           borderColor: '#b3121b',
           backgroundColor: 'rgba(179, 18, 27, 0.1)',
@@ -138,7 +176,7 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
           tension: 0.1
         },
         {
-          label: 'Верхня межа похибки',
+          label: 'Верхня межа похибки: ',
           data: [],
           borderColor: 'rgba(179, 18, 27, 0.3)',
           borderDash: [4, 4],
@@ -147,7 +185,7 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
           fill: '+1'
         },
         {
-          label: 'Нижня межа похибки',
+          label: 'Нижня межа похибки: ',
           data: [],
           borderColor: 'rgba(179, 18, 27, 0.3)',
           borderDash: [4, 4],
@@ -170,7 +208,7 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
       maintainAspectRatio: false,
       scales: {
         y: { beginAtZero: true, title: { display: true, text: D.unit } },
-        x: { title: { display: true, text: 'Рік' } }
+        x: { title: { display: true, text: 'Квартал' }, ticks: { maxTicksLimit: 8 } }
       },
       plugins: {
         legend: { display: false }
@@ -183,23 +221,21 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
     const countryData = D.data[targetIso] || [];
     const countryErrors = (D.errors && D.errors[targetIso]) || countryData.map(() => 0);
     
-    // Знаходимо назву країни для заголовка
     const feature = geo.features.find(f => iso(f.properties) === targetIso);
     if (feature) {
       document.getElementById('chart-country-name').textContent = nameOf(feature.properties);
     }
 
-    // Формуємо масиви для основної лінії та меж похибки
     const mainValues = countryData;
-    const upperValues = countryData.map((v, idx) => v != null ? v + countryErrors[idx] : null);
-    const lowerValues = countryData.map((v, idx) => v != null ? Math.max(0, v - countryErrors[idx]) : null);
+    const hasBand = D.upper && D.lower && D.upper[targetIso];
+    const upperValues = hasBand ? D.upper[targetIso] : countryData.map((v, idx) => v != null ? v + countryErrors[idx] : null);
+    const lowerValues = hasBand ? D.lower[targetIso] : countryData.map((v, idx) => v != null ? Math.max(0, v - countryErrors[idx]) : null);
 
     countryChart.data.datasets[0].data = mainValues;
     countryChart.data.datasets[1].data = upperValues;
     countryChart.data.datasets[2].data = lowerValues;
     countryChart.update();
 
-    // Оновлюємо виділення на карті
     paths.classed("selected", f => iso(f.properties) === targetIso)
          .filter(f => iso(f.properties) === targetIso).raise();
   }
@@ -228,14 +264,15 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
 
   function show(k) {
     i = k; slider.value = k;
-    const isForecast = Object.values(D.errors || {}).some(a => a[k] > 0);
-    yearEl.innerHTML = D.years[k] + `<small>${isForecast ? "прогноз" : "дані"}</small>`;
+    const isForecast = D.forecast_from != null ? k >= D.forecast_from : Object.values(D.errors || {}).some(a => a[k] > 0);
+    const noData = D.data_from != null && k < D.data_from;
+    yearEl.innerHTML = D.years[k] + `<small>${noData ? "немає даних" : isForecast ? "прогноз" : "дані"}</small>`;
     paths.attr("fill", fill);
     countryChart.draw();
   }
   
   show(0);
-  updateChartForIso(selectedIso); // ініціалізація графіку для стартової країни
+  updateChartForIso(selectedIso); 
   
   slider.oninput = () => show(+slider.value);
 
