@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Африка: динаміка та прогноз</title>
+<style>
+  :root { --ink:#2b2320; --muted:#7a6c66; --bg:#f6f3f0; --nodata:#d9d4d0; --accent:#b3121b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: Georgia, "Times New Roman", serif; }
+  main { max-width:1350px; margin:0 auto; padding:20px 16px 32px; }
+  header { display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap; margin-bottom: 20px; }
+  h1 { margin:0; font-size:24px; font-weight:600; }
+  #sub { color:var(--muted); font-size:14px; margin-top:4px; }
+  #year small { display:block; font-size:14px; font-weight:400; color:var(--muted); text-align:right; min-height:18px; }
+  #year { font-size:64px; line-height:1; font-weight:700; color:var(--accent); font-variant-numeric: tabular-nums; }
+  
+  .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .map-container { flex: 1; min-width: 500px; }
+  
+  #stage { position:relative; background: #fff; border: 1px solid #e0dad6; padding: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); }
+  svg { width:100%; height:auto; display:block; }
+  path.c { stroke:#fff; stroke-width:.6; transition: fill .35s; cursor:pointer; }
+  path.c:hover { stroke:var(--ink); stroke-width:1.4; }
+  path.selected { stroke: var(--ink) !important; stroke-width: 2px !important; }
+  
+  #tip { position:absolute; pointer-events:none; background:#fff; border:1px solid #ddd;
+         padding:6px 10px; font-size:13px; display:none; box-shadow:0 2px 8px rgba(0,0,0,.12); z-index: 10; }
+  #legend { position:absolute; left:16px; bottom:16px; font-size:12px; color:var(--muted); background: rgba(255,255,255,0.85); padding: 8px; border: 1px solid #ddd; }
+  #bar { width:160px; height:10px; background:linear-gradient(to right,#fff,#b3121b); border:1px solid #ccc; margin-top: 4px; }
+  #legend div.l { display:flex; justify-content:space-between; }
+  #legend .nd { display:flex; align-items:center; gap:6px; margin-top:6px; }
+  #legend .nd i { width:12px; height:12px; background:var(--nodata); display:inline-block; }
+  
+  .sidebar { width: 440px; background: #fff; border: 1px solid #e0dad6; padding: 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); display: flex; flex-direction: column; }
+  .sidebar h3 { margin: 0 0 4px 0; font-size: 18px; }
+  .sidebar .chart-sub { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .chart-container { position: relative; width: 100%; height: 350px; }
+
+  #controls { display:flex; gap:14px; align-items:center; margin-top:14px; width: 100%; }
+  button { font:inherit; font-size:15px; padding:8px 18px; border:1px solid var(--ink);
+           background:var(--ink); color:#fff; cursor:pointer; min-width:110px; }
+  button:focus-visible, input:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+  input[type=range] { flex:1; accent-color:var(--accent); }
+  select { font:inherit; padding:6px; }
+  #err { color:var(--accent); display:none; margin-top:12px; }
+  @media (prefers-reduced-motion: reduce) { path.c { transition:none; } }
+</style>
+<!-- Підключення Chart.js для побудови графіка -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1 id="title">Завантаження…</h1>
+      <div id="sub"></div>
+    </div>
+    <div id="year" aria-live="polite"></div>
+  </header>
+
+  <div class="layout">
+    <div class="map-container">
+      <div id="stage">
+        <svg id="map" viewBox="0 0 800 800" role="img" aria-label="Карта Африки"></svg>
+        <div id="legend">
+          <div>Показник (на 100 тис.)</div>
+          <div id="bar"></div>
+          <div class="l"><span>0</span><span id="maxl"></span></div>
+          <div class="nd"><i></i>немає даних</div>
+        </div>
+        <div id="tip"></div>
+      </div>
+
+      <div id="controls">
+        <button id="play">▶ Грати</button>
+        <input id="slider" type="range" min="0" value="0" aria-label="Рік">
+        <select id="speed" aria-label="Швидкість">
+          <option value="1200">повільно</option>
+          <option value="600" selected>середньо</option>
+          <option value="250">швидко</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <h3 id="chart-country-name">Виберіть країну</h3>
+      <div class="chart-sub">Динаміка та прогноз (з похибкою)</div>
+      <div class="chart-container">
+        <canvas id="countryChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div id="err"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>
+const color = d3.scaleLinear().range(["#ffffff", "#b3121b"]).clamp(true);
+const iso = p => p.ADM0_A3 || p.ISO_A3 || p.iso_a3 || p.id;
+const nameOf = p => p.NAME_UK || p.NAME || p.name || iso(p);
+
+Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) => {
+  document.getElementById("title").textContent = D.disease;
+  document.getElementById("sub").textContent = D.unit;
+  document.getElementById("maxl").textContent = Math.round(D.max);
+  color.domain([0, D.max]);
+
+  const W = 800, H = 800;
+  const proj = d3.geoMercator().fitSize([W, H], geo);
+  const path = d3.geoPath(proj);
+  const svg = d3.select("#map");
+  const tip = document.getElementById("tip");
+  let i = 0, timer = null;
+  let selectedIso = "NGA"; // Обрана країна за замовчуванням (Нігерія)
+
+  const val = f => { const a = D.data[iso(f.properties)]; return a ? a[i] : null; };
+  const errVal = f => { const eArr = D.errors ? D.errors[iso(f.properties)] : null; return eArr ? eArr[i] : 0; };
+  const fill = f => { const v = val(f); return v == null ? "var(--nodata)" : color(v); };
+
+  // Ініціалізація графіку Chart.js
+  const ctx = document.getElementById('countryChart').getContext('2d');
+  const years = D.years;
+  
+  let countryChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        {
+          label: 'Значення',
+          data: [],
+          borderColor: '#b3121b',
+          backgroundColor: 'rgba(179, 18, 27, 0.1)',
+          borderWidth: 2,
+          fill: false,
+          tension: 0.1
+        },
+        {
+          label: 'Верхня межа похибки',
+          data: [],
+          borderColor: 'rgba(179, 18, 27, 0.3)',
+          borderDash: [4, 4],
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: '+1'
+        },
+        {
+          label: 'Нижня межа похибки',
+          data: [],
+          borderColor: 'rgba(179, 18, 27, 0.3)',
+          borderDash: [4, 4],
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false
+        }
+      ]
+    },
+    plugins: [{
+      id: 'currentYear',
+      afterDatasetsDraw(chart) {
+        const x = chart.scales.x.getPixelForValue(i), a = chart.chartArea, c = chart.ctx;
+        c.save(); c.strokeStyle = '#2b2320'; c.lineWidth = 1.5;
+        c.beginPath(); c.moveTo(x, a.top); c.lineTo(x, a.bottom); c.stroke(); c.restore();
+      }
+    }],
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { beginAtZero: true, title: { display: true, text: D.unit } },
+        x: { title: { display: true, text: 'Рік' } }
+      },
+      plugins: {
+        legend: { display: false }
+      }
+    }
+  });
+
+  function updateChartForIso(targetIso) {
+    selectedIso = targetIso;
+    const countryData = D.data[targetIso] || [];
+    const countryErrors = (D.errors && D.errors[targetIso]) || countryData.map(() => 0);
+    
+    // Знаходимо назву країни для заголовка
+    const feature = geo.features.find(f => iso(f.properties) === targetIso);
+    if (feature) {
+      document.getElementById('chart-country-name').textContent = nameOf(feature.properties);
+    }
+
+    // Формуємо масиви для основної лінії та меж похибки
+    const mainValues = countryData;
+    const upperValues = countryData.map((v, idx) => v != null ? v + countryErrors[idx] : null);
+    const lowerValues = countryData.map((v, idx) => v != null ? Math.max(0, v - countryErrors[idx]) : null);
+
+    countryChart.data.datasets[0].data = mainValues;
+    countryChart.data.datasets[1].data = upperValues;
+    countryChart.data.datasets[2].data = lowerValues;
+    countryChart.update();
+
+    // Оновлюємо виділення на карті
+    paths.classed("selected", f => iso(f.properties) === targetIso)
+         .filter(f => iso(f.properties) === targetIso).raise();
+  }
+
+  const paths = svg.selectAll("path").data(geo.features).join("path")
+    .attr("class", "c")
+    .attr("d", path)
+    .attr("fill", fill)
+    .classed("selected", f => iso(f.properties) === selectedIso)
+    .on("click", (e, f) => {
+      updateChartForIso(iso(f.properties));
+    })
+    .on("mousemove", (e, f) => {
+      const v = val(f), err = errVal(f);
+      const errStr = err > 0 ? ` <span style="color:#b3121b;">(±${err})</span>` : "";
+      const box = document.getElementById("stage").getBoundingClientRect();
+      tip.style.display = "block";
+      tip.style.left = (e.clientX - box.left + 12) + "px";
+      tip.style.top = (e.clientY - box.top + 12) + "px";
+      tip.innerHTML = `<b>${nameOf(f.properties)}</b><br>${v == null ? "немає даних" : v + errStr + " · " + D.years[i]}`;
+    })
+    .on("mouseleave", () => tip.style.display = "none");
+
+  const slider = document.getElementById("slider"), yearEl = document.getElementById("year");
+  slider.max = D.years.length - 1;
+
+  function show(k) {
+    i = k; slider.value = k;
+    const isForecast = Object.values(D.errors || {}).some(a => a[k] > 0);
+    yearEl.innerHTML = D.years[k] + `<small>${isForecast ? "прогноз" : "дані"}</small>`;
+    paths.attr("fill", fill);
+    countryChart.draw();
+  }
+  
+  show(0);
+  updateChartForIso(selectedIso); // ініціалізація графіку для стартової країни
+  
+  slider.oninput = () => show(+slider.value);
+
+  const btn = document.getElementById("play");
+  function stop() { clearInterval(timer); timer = null; btn.textContent = "▶ Грати"; }
+  function start() {
+    if (i >= D.years.length - 1) show(0);
+    btn.textContent = "⏸ Пауза";
+    timer = setInterval(() => {
+      if (i >= D.years.length - 1) return stop();
+      show(i + 1);
+    }, +document.getElementById("speed").value);
+  }
+  btn.onclick = () => timer ? stop() : start();
+  document.getElementById("speed").onchange = () => { if (timer) { stop(); start(); } };
+}).catch(e => {
+  const el = document.getElementById("err");
+  el.style.display = "block";
+  el.textContent = "Не вдалося завантажити africa.geojson / data.json. Відкрий сторінку через `python -m http.server`. " + e;
+});
+</script>
+</body>
+</html>
