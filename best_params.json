@@ -1,0 +1,11 @@
+{
+  "cps": 0.5,
+  "growth": "linear",
+  "cap_factor": null,
+  "applied": false,
+  "test_points": 15,
+  "test_gain": {
+    "log_mae": -0.027,
+    "rmse": 0.854
+  }
+}
