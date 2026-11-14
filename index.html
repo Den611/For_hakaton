@@ -99,7 +99,7 @@
     <div class="side-column">
       <section class="card">
         <h3 id="chart-country-name">Виберіть країну</h3>
-        <div class="chart-sub">Факт: дані ВООЗ (порожнє коло — попередній квартал)</div>
+        <div class="chart-sub">Дані ВООЗ</div>
         <div class="chart-container"><canvas id="factChart"></canvas></div>
       </section>
 
@@ -157,9 +157,9 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
     }
     nb.innerHTML = `<ul>
       <li><b>Кореляція ≠ причинність.</b> Модель (${m.model || "Prophet"}) екстраполює часовий ряд підтверджених випадків. Вона нічого не каже про причини змін: втручання, поведінку, сезонність чи властивості збудника.</li>
-      <li><b>Неповнота й затримки звітування.</b> Останній квартал (${m.last_observed || ""}) позначений як попередній і не бере участі в навчанні. Квартали з повнотою звітів нижче ${Math.round((m.min_coverage || 0.5) * 100)}% виключені з навчання як пропуски (не нулі).${az === "none" ? " Квартали без звітів на карті сірі; звітний нуль лишається нулем." : ""}</li>
-      <li><b>Тестування.</b> Набір містить лише підтверджені${m.includes_probable ? " та ймовірні" : ""} випадки, без даних про кількість тестів. Зміни в діагностичній спроможності чи визначенні випадку можуть створювати або приховувати «тренди», і модель цього не виправляє./li>
-      <li><b>Прогноз</b> - це безумовна екстраполяція тренду з обмеженням зверху (${m.cap_factor ? m.cap_factor + "× історичного максимуму" : "без стелі"}; межі інтервалу обрізані тією самою стелею), а не передбачення подій.</li></ul>`;;
+      <li><b>Неповнота й затримки звітування.</b> Останній квартал (${m.last_observed || ""}) позначений як попередній і не бере участі в навчанні. Квартали з повнотою звітів нижче ${Math.round((m.min_coverage || 0.5) * 100)}% виключені з навчання як пропуски (не нулі).${az === "none" ? " Квартали без звітів на карті сірі; звітний нуль лишається нулем." : ""} </li>
+      <li><b>Тестування.</b> Набір містить лише підтверджені${m.includes_probable ? " та ймовірні" : ""} випадки, без даних про кількість тестів. Зміни в діагностичній спроможності чи визначенні випадку можуть створювати або приховувати «тренди», і модель цього не виправляє. </li>
+      <li><b>Прогноз</b> - це безумовна екстраполяція тренду, а не передбачення подій.</li></ul>`;;
   })();
   document.getElementById("maxl").textContent = Math.round(D.max);
   COLOR_MAX = D.max; DATA = D.data;
@@ -225,7 +225,7 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
       scales: { y: yAxis(), x: xAxis() } }
   });
   document.getElementById("fc-sub").textContent =
-    `Червоний — факт, синій — прогноз Prophet (інтервал ${Math.round(((D.meta || {}).interval || 0.8) * 100)}%)`;
+    `Червоний - факт, синій - прогноз Prophet`;
 
   function updateChartForIso(targetIso) {
     selectedIso = targetIso;
@@ -262,9 +262,6 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
       // чесне попередження: коридор у даних уже обрізаний стелею прогнозу
       const hist = all.slice(f0, f1).filter(v => v != null);
       const cap = (D.meta && D.meta.cap_factor) ? Math.max(...hist, 0) * D.meta.cap_factor : null;
-      note.textContent = (cap && Math.max(...upFc, 0) >= Math.floor(cap) - 1)
-        ? `Верхню межу інтервалу обрізано стелею (${Math.round(cap).toLocaleString("uk")}); справжня невизначеність може бути більшою.`
-        : "";
     }
     fcChart.update();
 
