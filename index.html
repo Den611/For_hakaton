@@ -256,13 +256,6 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
     const peak = Math.max(...central, ...upFc, 0);
     fcChart.options.scales.y.max = Math.max(10, Math.ceil(peak * 1.08));
     const note = document.getElementById("chart-note");
-    if (fcOnly.length === 0) {
-      note.textContent = "Прогнозу для цієї країни немає: замало кварталів із реальними звітами.";
-    } else {
-      // чесне попередження: коридор у даних уже обрізаний стелею прогнозу
-      const hist = all.slice(f0, f1).filter(v => v != null);
-      const cap = (D.meta && D.meta.cap_factor) ? Math.max(...hist, 0) * D.meta.cap_factor : null;
-    }
     fcChart.update();
 
     paths.classed("selected", f => iso(f.properties) === targetIso)
