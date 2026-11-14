@@ -15,16 +15,16 @@
   #sub { color:var(--muted); font-size:14px; margin-top:4px; }
   #year small { display:block; font-size:14px; font-weight:400; color:var(--muted); text-align:right; min-height:18px; }
   #year { font-size:64px; line-height:1; font-weight:700; color:var(--accent); font-variant-numeric: tabular-nums; }
-  
+
   .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
   .map-container { flex: 1; min-width: 500px; }
-  
+
   #stage { position:relative; background: #e6edf1; border: 1px solid #e0dad6; padding: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); }
   svg { width:100%; height:auto; display:block; }
   path.c { stroke:#b9b2ad; stroke-width:.6; transition: fill .35s; cursor:pointer; }
   path.c:hover { stroke:var(--ink); stroke-width:1.4; }
   path.selected { stroke: var(--ink) !important; stroke-width: 2px !important; }
-  
+
   #tip { position:absolute; pointer-events:none; background:#fff; border:1px solid #ddd;
          padding:6px 10px; font-size:13px; display:none; box-shadow:0 2px 8px rgba(0,0,0,.12); z-index: 10; }
   #legend { position:absolute; left:16px; bottom:16px; font-size:12px; color:var(--muted); background: rgba(255,255,255,0.85); padding: 8px; border: 1px solid #ddd; }
@@ -37,22 +37,11 @@
   .card { background: #fff; border: 1px solid #e0dad6; padding: 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); }
   .card h3 { margin: 0 0 4px 0; font-size: 18px; }
   .card .chart-sub { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
-  .chart-container { position: relative; width: 100%; height: 320px; }
+  .chart-container { position: relative; width: 100%; height: 260px; }
 
-  #protection-box h4 {
-    margin: 0 0 10px 0;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--accent);
-    border-bottom: 1px solid #e0dad6;
-    padding-bottom: 6px;
-  }
-  #protection-box ul {
-    margin: 0;
-    padding-left: 18px;
-    font-size: 13.5px;
-    line-height: 1.45;
-  }
+  #protection-box h4 { margin: 0 0 10px 0; font-size: 16px; font-weight: 600; color: var(--accent);
+                       border-bottom: 1px solid #e0dad6; padding-bottom: 6px; }
+  #protection-box ul { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.45; }
   #protection-box li { margin-bottom: 8px; }
   #protection-box li:last-child { margin-bottom: 0; }
 
@@ -91,7 +80,7 @@
           <div>Нових випадків за квартал (шкала √)</div>
           <div id="bar"></div>
           <div class="l"><span>0</span><span id="maxl"></span></div>
-          <div class="nd"><i></i>немає даних</div>
+          <div class="nd"><i></i>немає даних / поза набором ВООЗ</div>
         </div>
         <div id="tip"></div>
       </div>
@@ -110,10 +99,15 @@
     <div class="side-column">
       <section class="card">
         <h3 id="chart-country-name">Виберіть країну</h3>
-        <div class="chart-sub">Факт і прогноз Prophet (інтервал 80%)</div>
-        <div class="chart-container">
-          <canvas id="countryChart"></canvas>
-        </div>
+        <div class="chart-sub">Факт: дані ВООЗ (порожнє коло — попередній квартал)</div>
+        <div class="chart-container"><canvas id="factChart"></canvas></div>
+      </section>
+
+      <section class="card">
+        <h3>Факт і прогноз</h3>
+        <div class="chart-sub" id="fc-sub">Prophet</div>
+        <div class="chart-container"><canvas id="forecastChart"></canvas></div>
+        <div id="chart-note" class="chart-sub" style="margin:8px 0 0"></div>
       </section>
 
       <section id="protection-box" class="card">
@@ -149,11 +143,12 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
   (function () {
     const m = D.meta || {}, bt = m.backtest || {};
     const pct = Math.round((m.interval || 0.8) * 100);
+    const az = m.assume_zero || "none";
     const widen = bt.widen_factor > 1
       ? `Інтервали ${pct}% розширено в ${bt.widen_factor} раза за результатами бектесту (на минулих даних покриття було ${Math.round((bt.coverage || 0) * 100)}%).`
       : `Інтервали ${pct}% не розширювалися.`;
     let nb = document.getElementById("notes-body");
-    if (!nb) {  
+    if (!nb) {
       const d = document.createElement("details");
       d.className = "notes";
       d.innerHTML = '<summary>Про дані та обмеження</summary><div id="notes-body"></div>';
@@ -162,9 +157,9 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
     }
     nb.innerHTML = `<ul>
       <li><b>Кореляція ≠ причинність.</b> Модель (${m.model || "Prophet"}) екстраполює часовий ряд підтверджених випадків. Вона нічого не каже про причини змін: втручання, поведінку, сезонність чи властивості збудника.</li>
-      <li><b>Неповнота й затримки звітування.</b> Останній квартал (${m.last_observed || ""}) позначений як попередній і не бере участі в навчанні. Квартали без звітів або з повнотою нижче ${Math.round((m.min_coverage || 0.5) * 100)}% виключені з навчання як пропуски (не нулі) і на карті сірі; звітний нуль лишається нулем.${m.trailing_zero ? " Квартали після останнього звіту країни взято в навчання як 0 — це припущення про завершення спалаху." : ""} ${widen} Бектест використовує вже доповнені дані, тому реальні затримки він відтворює не повністю.</li>
-      <li><b>Тестування.</b> Набір містить лише підтверджені${m.includes_probable ? " та ймовірні" : ""} випадки, без даних про кількість тестів. Зміни в діагностичній спроможності чи визначенні випадку можуть створювати або приховувати «тренди», і модель цього не виправляє. Для кварталів, де частка смертей до випадків різко відхилилась від попередніх, у підказці є позначка ⚠ — це лише сигнал можливої зміни ураховуваності, не доказ. Зростання кількості випадків не означає зростання передачі.</li>
-      <li><b>Прогноз</b> — це безумовна екстраполяція тренду з обмеженням зверху (${m.cap_factor ? m.cap_factor + "× історичного максимуму" : "без стелі"}), а не передбачення подій.</li></ul>`;
+      <li><b>Неповнота й затримки звітування.</b> Останній квартал (${m.last_observed || ""}) позначений як попередній і не бере участі в навчанні. Квартали з повнотою звітів нижче ${Math.round((m.min_coverage || 0.5) * 100)}% виключені з навчання як пропуски (не нулі).${az === "none" ? " Квартали без звітів на карті сірі; звітний нуль лишається нулем." : ""}</li>
+      <li><b>Тестування.</b> Набір містить лише підтверджені${m.includes_probable ? " та ймовірні" : ""} випадки, без даних про кількість тестів. Зміни в діагностичній спроможності чи визначенні випадку можуть створювати або приховувати «тренди», і модель цього не виправляє./li>
+      <li><b>Прогноз</b> - це безумовна екстраполяція тренду з обмеженням зверху (${m.cap_factor ? m.cap_factor + "× історичного максимуму" : "без стелі"}; межі інтервалу обрізані тією самою стелею), а не передбачення подій.</li></ul>`;;
   })();
   document.getElementById("maxl").textContent = Math.round(D.max);
   COLOR_MAX = D.max; DATA = D.data;
@@ -175,88 +170,103 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
   const svg = d3.select("#map");
   const tip = document.getElementById("tip");
   let i = 0, timer = null;
-  let selectedIso = "COD"; 
+  let selectedIso = "COD";
 
   const val = f => { const a = D.data[iso(f.properties)]; return a ? a[i] : null; };
   const fill = f => { const v = val(f); return v == null ? "var(--nodata)" : color(v); };
 
-  const ctx = document.getElementById('countryChart').getContext('2d');
-  const years = D.years;
-  
-  let countryChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: years,
-      datasets: [
-        {
-          label: 'Значення',
-          data: [],
-          borderColor: '#b3121b',
-          backgroundColor: 'rgba(179, 18, 27, 0.1)',
-          borderWidth: 2,
-          fill: false,
-          tension: 0.1
-        },
-        {
-          label: 'Верхня межа похибки',
-          data: [],
-          borderColor: 'rgba(179, 18, 27, 0.3)',
-          borderDash: [4, 4],
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: '+1'
-        },
-        {
-          label: 'Нижня межа похибки',
-          data: [],
-          borderColor: 'rgba(179, 18, 27, 0.3)',
-          borderDash: [4, 4],
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: false
-        }
-      ]
-    },
-    plugins: [{
-      id: 'currentYear',
-      afterDatasetsDraw(chart) {
-        const x = chart.scales.x.getPixelForValue(i), a = chart.chartArea, c = chart.ctx;
-        c.save(); c.strokeStyle = '#2b2320'; c.lineWidth = 1.5;
-        c.beginPath(); c.moveTo(x, a.top); c.lineTo(x, a.bottom); c.stroke(); c.restore();
-      }
-    }],
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: { beginAtZero: true, title: { display: true, text: D.unit } },
-        x: { title: { display: true, text: 'Квартал' }, ticks: { maxTicksLimit: 8 } }
-      },
-      plugins: {
-        legend: { display: false }
-      }
+  const f0 = D.data_from || 0;
+  const f1 = D.forecast_from != null ? D.forecast_from : D.years.length;
+  const marker = (from, len) => ({
+    id: "currentQuarter",
+    afterDatasetsDraw(chart) {
+      const idx = i - from;
+      if (idx < 0 || idx >= len) return;
+      const x = chart.scales.x.getPixelForValue(idx), a = chart.chartArea, c = chart.ctx;
+      c.save(); c.strokeStyle = "#2b2320"; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(x, a.top); c.lineTo(x, a.bottom); c.stroke(); c.restore();
     }
   });
+  const xAxis = () => ({ title: { display: true, text: "Квартал" }, ticks: { maxTicksLimit: 6 } });
+  const yAxis = () => ({ beginAtZero: true, title: { display: true, text: D.unit } });
+  const common = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
+
+  const factChart = new Chart(document.getElementById("factChart"), {
+    type: "line",
+    data: {
+      labels: D.years.slice(f0, f1),
+      datasets: [{
+        label: "Факт", data: [], borderColor: "#b3121b", borderWidth: 2, tension: 0.1, pointRadius: 3,
+        pointBorderColor: "#b3121b",
+        pointBackgroundColor: c => (D.provisional_from != null && c.dataIndex + f0 >= D.provisional_from) ? "#fff" : "#b3121b"
+      }]
+    },
+    plugins: [marker(f0, f1 - f0)],
+    options: { ...common, scales: { y: yAxis(), x: xAxis() } }
+  });
+
+  const FC = "#1f5fa8";   // синій — прогноз, червоний — факт
+  const fcChart = new Chart(document.getElementById("forecastChart"), {
+    type: "line",
+    data: {
+      labels: D.years.slice(f0),
+      datasets: [
+        { label: "Факт", data: [], borderColor: "#b3121b", borderWidth: 2, tension: 0.1, pointRadius: 3,
+          pointBorderColor: "#b3121b",
+          pointBackgroundColor: c => (D.provisional_from != null && c.dataIndex + f0 >= D.provisional_from) ? "#fff" : "#b3121b" },
+        { label: "Прогноз", data: [], borderColor: FC, backgroundColor: FC, borderWidth: 2, tension: 0.1, pointRadius: 3 },
+        { label: "Верхня межа", data: [], borderColor: "rgba(31, 95, 168, 0.35)", backgroundColor: "rgba(31, 95, 168, 0.12)", borderDash: [4, 4], borderWidth: 1, pointRadius: 0, fill: "+1" },
+        { label: "Нижня межа", data: [], borderColor: "rgba(31, 95, 168, 0.35)", borderDash: [4, 4], borderWidth: 1, pointRadius: 0, fill: false }
+      ]
+    },
+    plugins: [marker(f0, D.years.length - f0)],
+    options: { ...common,
+      plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 14, filter: it => it.datasetIndex < 2 } } },
+      scales: { y: yAxis(), x: xAxis() } }
+  });
+  document.getElementById("fc-sub").textContent =
+    `Червоний — факт, синій — прогноз Prophet (інтервал ${Math.round(((D.meta || {}).interval || 0.8) * 100)}%)`;
 
   function updateChartForIso(targetIso) {
     selectedIso = targetIso;
-    const countryData = D.data[targetIso] || [];
-    const countryErrors = (D.errors && D.errors[targetIso]) || countryData.map(() => 0);
-
+    const all = D.data[targetIso] || [];
     const feature = geo.features.find(f => iso(f.properties) === targetIso);
-    if (feature) {
-      document.getElementById('chart-country-name').textContent = nameOf(feature.properties);
-    }
+    if (feature) document.getElementById("chart-country-name").textContent = nameOf(feature.properties);
 
-    const mainValues = countryData;
+    // 1) факт
+    factChart.data.datasets[0].data = all.slice(f0, f1);
+    factChart.update();
+
+    // 2) факт і прогноз на одному графіку (одна вісь Y)
+    const errs = (D.errors && D.errors[targetIso]) || all.map(() => 0);
     const hasBand = D.upper && D.lower && D.upper[targetIso];
-    const upperValues = hasBand ? D.upper[targetIso] : countryData.map((v, idx) => v != null ? v + countryErrors[idx] : null);
-    const lowerValues = hasBand ? D.lower[targetIso] : countryData.map((v, idx) => v != null ? Math.max(0, v - countryErrors[idx]) : null);
+    const upAll = hasBand ? D.upper[targetIso] : all.map((v, k) => v != null ? v + errs[k] : null);
+    const loAll = hasBand ? D.lower[targetIso] : all.map((v, k) => v != null ? Math.max(0, v - errs[k]) : null);
+    const cut = (arr, wantForecast) => arr.slice(f0).map((v, k) => ((k + f0 >= f1) === wantForecast ? v : null));
+    fcChart.data.datasets[0].data = cut(all, false);
+    fcChart.data.datasets[1].data = cut(all, true);
+    fcChart.data.datasets[2].data = cut(upAll, true);
+    fcChart.data.datasets[3].data = cut(loAll, true);
 
-    countryChart.data.datasets[0].data = mainValues;
-    countryChart.data.datasets[1].data = upperValues;
-    countryChart.data.datasets[2].data = lowerValues;
-    countryChart.update();
+    // вісь Y — під значення (факт і прогноз); межа, що вилітає, обрізається рамкою
+    const central = all.slice(f0).filter(v => v != null);
+    const upFc = cut(upAll, true).filter(v => v != null);
+    const fcOnly = cut(all, true).filter(v => v != null);
+    // вісь Y охоплює і значення, і ВЕСЬ коридор похибки (з запасом 8%)
+    const peak = Math.max(...central, ...upFc, 0);
+    fcChart.options.scales.y.max = Math.max(10, Math.ceil(peak * 1.08));
+    const note = document.getElementById("chart-note");
+    if (fcOnly.length === 0) {
+      note.textContent = "Прогнозу для цієї країни немає: замало кварталів із реальними звітами.";
+    } else {
+      // чесне попередження: коридор у даних уже обрізаний стелею прогнозу
+      const hist = all.slice(f0, f1).filter(v => v != null);
+      const cap = (D.meta && D.meta.cap_factor) ? Math.max(...hist, 0) * D.meta.cap_factor : null;
+      note.textContent = (cap && Math.max(...upFc, 0) >= Math.floor(cap) - 1)
+        ? `Верхню межу інтервалу обрізано стелею (${Math.round(cap).toLocaleString("uk")}); справжня невизначеність може бути більшою.`
+        : "";
+    }
+    fcChart.update();
 
     paths.classed("selected", f => iso(f.properties) === targetIso)
          .filter(f => iso(f.properties) === targetIso).raise();
@@ -272,7 +282,8 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
     let h = head + `${v.toLocaleString("uk")} · ${D.years[i]}`;
     if (fc && D.lower && D.lower[id]) h += `<br><i>прогноз (не факт): ${D.lower[id][i].toLocaleString("uk")}–${D.upper[id][i].toLocaleString("uk")}</i>`;
     if (pv) h += "<br><i>попередні дані, можуть бути доповнені</i>";
-    if (!fc && cov != null && cov < 1 && cov < minCov) h += `<br><i>неповні звіти: ${Math.round(cov * 100)}% тижнів — виключено з навчання</i>`;
+    if (!fc && cov === 0) h += "<br><i>звітів немає — прийнято 0 (припущення)</i>";
+    if (!fc && cov != null && cov > 0 && cov < minCov) h += `<br><i>неповні звіти: ${Math.round(cov * 100)}% тижнів — виключено з навчання</i>`;
     const sh = D.cfr_shift && D.cfr_shift[id] ? D.cfr_shift[id][i] : null;
     if (!fc && sh === 1) h += `<br><i>⚠ частка смертей до випадків різко змінилась (${D.cfr[id][i]}%): можлива зміна ураховуваності — сигнал, не доказ</i>`;
     return h;
@@ -283,9 +294,7 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
     .attr("d", path)
     .attr("fill", fill)
     .classed("selected", f => iso(f.properties) === selectedIso)
-    .on("click", (e, f) => {
-      updateChartForIso(iso(f.properties));
-    })
+    .on("click", (e, f) => updateChartForIso(iso(f.properties)))
     .on("mousemove", (e, f) => {
       const box = document.getElementById("stage").getBoundingClientRect();
       tip.style.display = "block";
@@ -305,12 +314,13 @@ Promise.all([d3.json("africa.geojson"), d3.json("data.json")]).then(([geo, D]) =
     const prov = !isForecast && D.provisional_from != null && k >= D.provisional_from;
     yearEl.innerHTML = D.years[k] + `<small>${noData ? "немає даних" : isForecast ? "прогноз" : prov ? "попередні дані" : "дані"}</small>`;
     paths.attr("fill", fill);
-    countryChart.draw();
+    factChart.draw();
+    fcChart.draw();
   }
-  
+
   show(0);
-  updateChartForIso(selectedIso); 
-  
+  updateChartForIso(selectedIso);
+
   slider.oninput = () => show(+slider.value);
 
   const btn = document.getElementById("play");

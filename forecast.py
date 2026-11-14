@@ -1,3 +1,24 @@
+#!/usr/bin/env python3
+"""Квартальні дані ВООЗ (mpox, AFRO) + прогноз Facebook Prophet -> data.json для карти.
+
+    pip install prophet pandas numpy
+    python forecast.py AFRO_only.json            # -> data.json
+    python forecast.py AFRO_only.json --end 2030 --csv result.csv
+
+Врахування неповноти даних:
+  * квартали БЕЗ звітів (і з повнотою < --min-coverage) виключаються з навчання як пропуски,
+    а не вважаються нулями; «звіт із нулем» лишається справжнім нулем;
+  * останні --drop-last кварталів (1) вважаються ПОПЕРЕДНІМИ: показуються, але не беруть
+    участі в навчанні (звіти за них ще доповнюються);
+  * для кожного кварталу рахується повнота звітів (частка тижнів, за які є рядок ВООЗ):
+    «звіт із нулем» і «звіту немає» розрізняються у coverage;
+  * бектест (rolling origin, 1 квартал уперед) порівнює реальні значення з інтервалом
+    Prophet і, якщо покриття нижче заявленого, розширює інтервали на емпіричний коефіцієнт.
+    Це враховує нестабільність звітування/тестування лише в тій мірі, в якій вона видна в
+    історії; даних про обсяги тестування чи геноми в наборі немає, тож модель їх не бачить.
+  * індикатор зсуву частки смертей до випадків (cfr_shift) — лише СИГНАЛ можливої зміни
+    ураховуваності/тестування, а не доказ і не поправка до прогнозу.
+"""
 import argparse
 import json
 import logging
@@ -10,7 +31,7 @@ logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 logging.getLogger("prophet").setLevel(logging.WARNING)
 
 
-#  дані
+# ---------- дані ----------
 def load_weekly(path, include_probable):
     raw = json.load(open(path, encoding="utf-8"))
     rows = raw["value"] if isinstance(raw, dict) else raw
@@ -20,7 +41,7 @@ def load_weekly(path, include_probable):
             .drop_duplicates(["ISO3", "DATE"], keep="last")
             .reset_index(drop=True))
     diff = df.groupby("ISO3")["TOTAL_CONF_CASES"].diff().fillna(df["TOTAL_CONF_CASES"])
-    new = df["NEW_CONF_CASES"].fillna(diff)           
+    new = df["NEW_CONF_CASES"].fillna(diff)           # пропуски -> різниця накопичених
     if include_probable:
         new = new + df["NEW_PROB_CASES"].fillna(0)
     df["NEW"] = new.clip(lower=0).fillna(0)
@@ -31,6 +52,9 @@ def load_weekly(path, include_probable):
 
 
 def quarterly_series(df):
+    """{ISO3: (cases, coverage, перший_квартал_звіту, deaths)}.
+    cases/deaths: 0 там, де звітів немає (відрізняти їх треба за coverage);
+    coverage: частка очікуваних тижнів, за які рядок є (0 = взагалі не звітувала)."""
     first_q, last_q, last_date = df["Q"].min(), df["Q"].max(), df["DATE"].max()
     idx = pd.period_range(first_q, last_q, freq="Q")
     weeks = pd.Series(
@@ -46,6 +70,8 @@ def quarterly_series(df):
 
 
 def cfr_shift(cases, deaths, cov, min_n=20, min_prior=50, min_ratio=2.0):
+    """Частка смертей до випадків по кварталах + сигнал різкого зсуву проти попередніх кварталів.
+    Евристика (нормальне наближення 95% + зміна щонайменше вдвічі), а не статистичний доказ."""
     cfr, flag = {}, {}
     pc = pd_ = 0.0
     for q in cases.index:
@@ -66,8 +92,9 @@ def cfr_shift(cases, deaths, cov, min_n=20, min_prior=50, min_ratio=2.0):
     return cfr, flag
 
 
-#  модель
+# ---------- модель ----------
 def n_train(s, first_rep, drop_last):
+    """Скільки кварталів із реальними звітами піде в навчання (без попередніх останніх)."""
     settled = s.iloc[:len(s) - drop_last] if drop_last else s
     return int(settled[first_rep:].notna().sum())
 
@@ -83,7 +110,8 @@ def from_model(x, use_log):
 
 
 def fit_predict(train, future, use_log, width, cap_factor, cps=0.05):
-    train = train.dropna()  
+    """Prophet на ряді train (Series з PeriodIndex) -> (yhat, lo, hi) у просторі моделі."""
+    train = train.dropna()          # квартали без/з неповними звітами — пропуски, не нулі
     if train.nunique() == 1:
         v = np.full(len(future), to_model(train.iloc[-1], use_log))
         return v, v.copy(), v.copy()
@@ -92,7 +120,7 @@ def fit_predict(train, future, use_log, width, cap_factor, cps=0.05):
 
     df = pd.DataFrame({"ds": train.index.start_time, "y": to_model(train.values, use_log)})
     logistic = cap_factor is not None
-    if logistic:
+    if logistic:  # стеля, щоб на довгому горизонті тренд не «вибухав»
         cap = float(to_model(train.max() * cap_factor, use_log))
         df["cap"], df["floor"] = cap, 0.0
     m = Prophet(growth="logistic" if logistic else "linear", changepoint_prior_scale=cps,
@@ -107,6 +135,7 @@ def fit_predict(train, future, use_log, width, cap_factor, cps=0.05):
 
 
 def backtest_ratios(items, drop_last, min_points, use_log, width, cap_factor, origins, cps=0.05):
+    """|похибка| / півширина інтервалу для 1-квартального прогнозу з кількох минулих точок."""
     ratios = []
     for iso, (s, _, first_rep) in items:
         settled = s.iloc[:len(s) - drop_last] if drop_last else s
@@ -122,7 +151,7 @@ def backtest_ratios(items, drop_last, min_points, use_log, width, cap_factor, or
     return np.array(ratios)
 
 
-#  основна програма 
+# ---------- основна програма ----------
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
@@ -133,9 +162,11 @@ def main():
     ap.add_argument("--interval", type=float, default=0.8, help="ширина інтервалу (0.8)")
     ap.add_argument("--min-coverage", type=float, default=0.5,
                     help="квартали з меншою часткою звітних тижнів виключаються з навчання (0.5)")
-    ap.add_argument("--trailing-zero", action="store_true",
-                    help="квартали ПІСЛЯ останнього звіту країни брати в навчання як 0 "
-                         "(припущення, що спалах завершився); на карті вони лишаються сірими")
+    ap.add_argument("--assume-zero", choices=["none", "trailing", "all"], default="none",
+                    help="квартали без звітів: none — пропуски й сірі (за замовч.); "
+                         "trailing — після останнього звіту країни рахувати як 0 (спалах завершився); "
+                         "all — усі квартали без звітів як 0. Це ПРИПУЩЕННЯ: у підказці воно позначене")
+    ap.add_argument("--trailing-zero", action="store_true", help="те саме, що --assume-zero trailing")
     ap.add_argument("--drop-last", type=int, default=1,
                     help="скільки останніх кварталів вважати попередніми й не навчати на них (1)")
     ap.add_argument("--no-backtest", action="store_true", help="не калібрувати інтервали бектестом")
@@ -149,7 +180,7 @@ def main():
     ap.add_argument("--csv")
     a = ap.parse_args()
     use_log, cap_factor, cps = not a.no_log, (None if a.no_cap else a.cap), 0.05
-    if a.params:                    
+    if a.params:                      # результат tune.py застосовується лише якщо він себе виправдав
         bp = json.load(open(a.params))
         if bp.get("applied"):
             cps, cap_factor = bp["cps"], bp["cap_factor"]
@@ -173,15 +204,24 @@ def main():
     provisional_from = forecast_from - a.drop_last if a.drop_last else None
 
     raw = dict(series)
-    items = []
+    if a.trailing_zero:
+        a.assume_zero = "trailing"
+    items, assumed = [], {}
     for iso, (c, cv, fr, _) in sorted(raw.items()):
         m = c.where(cv >= a.min_coverage)
-        if a.trailing_zero:
-            m[m.index > cv[cv > 0].index.max()] = 0.0
+        no_rep = cv == 0
+        if a.assume_zero == "trailing":
+            mask = no_rep & (cv.index > cv[cv > 0].index.max())
+        elif a.assume_zero == "all":
+            mask = no_rep
+        else:
+            mask = no_rep & False
+        m[mask] = 0.0                       # у навчанні — нуль; без режиму лишається пропуском
+        assumed[iso] = mask
         items.append((iso, (m, cv, fr)))
     eligible = [(iso, v) for iso, v in items if n_train(v[0], v[2], a.drop_last) >= a.min_points]
 
-    #  калібрування інтервалів 
+    # --- калібрування інтервалів ---
     widen, bt = 1.0, {"n": 0}
     if not a.no_backtest:
         print(f"Бектест: {len(eligible)} країн × до {a.origins} точок…", file=sys.stderr)
@@ -194,7 +234,7 @@ def main():
               f"(ціль {a.interval}); коефіцієнт розширення: {widen:.2f}", file=sys.stderr)
     bt["widen_factor"] = round(widen, 2)
 
-    #  прогноз 
+    # --- прогноз ---
     data, lower, upper, errors, coverage, quality = {}, {}, {}, {}, {}, {}
     cfr_out, shift_out = {}, {}
     skipped, rows, forecasted = [], [], []
@@ -205,8 +245,8 @@ def main():
         for q in s.index:
             i = pos[q]
             cv[i], cf_l[i], sh_l[i] = round(float(cov[q]), 2), cf[q], sh[q]
-            if cov[q] > 0:                       # є звіт -> значення (навіть якщо 0)
-                x = int(round(cases_raw[q]))
+            if cov[q] > 0 or assumed[iso][q]:    # є звіт (навіть 0) або прийнятий нуль
+                x = int(round(cases_raw[q])) if cov[q] > 0 else 0
                 v[i] = lo[i] = hi[i] = x
                 er[i] = 0
                 rows.append((iso, str(q), x, None, None, False))
@@ -220,7 +260,7 @@ def main():
             yh, l, h = fit_predict(settled, future, use_log, a.interval, cap_factor, cps)
             l, h = yh - widen * (yh - l), yh + widen * (h - yh)
             yh, l, h = (from_model(z, use_log) for z in (yh, l, h))
-            if cap_factor is None and not a.no_cap:     # лінійний режим: стеля лише післяобробкою
+            if not a.no_cap:     # стеля і для прогнозу, і для меж інтервалу (log-шкала їх надуває)
                 top = np.nanmax(s.values) * a.cap
                 yh, l, h = np.minimum(yh, top), np.minimum(l, top), np.minimum(h, top)
             for j in range(horizon):
@@ -241,7 +281,7 @@ def main():
 
     vals = [x for arr in data.values() for x in arr if x is not None]
     payload = {
-        "disease": "Mавпяча віспа, регіон AFRO",
+        "disease": "Мавпяча віспа, Африка",
         "unit": "підтверджених випадків за квартал",
         "years": [f"{q.year} Q{q.quarter}" for q in quarters],
         "data_from": data_from, "provisional_from": provisional_from, "forecast_from": forecast_from,
@@ -249,7 +289,7 @@ def main():
         "data": data, "errors": errors, "lower": lower, "upper": upper, "coverage": coverage,
         "cfr": cfr_out, "cfr_shift": shift_out, "quality": quality,
         "meta": {"model": "Facebook Prophet", "log1p": use_log, "cap_factor": cap_factor,
-                 "interval": a.interval, "changepoint_prior_scale": cps, "drop_last": a.drop_last, "min_coverage": a.min_coverage, "trailing_zero": a.trailing_zero, "last_observed": str(last_q),
+                 "interval": a.interval, "changepoint_prior_scale": cps, "drop_last": a.drop_last, "min_coverage": a.min_coverage, "assume_zero": a.assume_zero, "last_observed": str(last_q),
                  "backtest": bt, "no_forecast": skipped, "forecasted": forecasted, "min_points": a.min_points,
                  "includes_probable": a.include_probable},
     }
